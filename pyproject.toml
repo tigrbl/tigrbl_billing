@@ -33,9 +33,11 @@ classifiers = [
 ]
 authors = [{ name = "Jacob Stewart", email = "jacob@swarmauri.com" }]
 dependencies = [
+    "anyio>=4.14.2,<5",
     "tigrbl",
 ]
 keywords = [
+    "anyio>=4.14.2,<5",
     "tigrbl",
     "sdk",
     "standards",
