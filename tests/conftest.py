@@ -19,8 +19,8 @@ import uvicorn
 
 import tigrbl as tigrbl_module
 import tigrbl.shortcuts.engine as tigrbl_engine_shortcuts
+from tigrbl import Request
 from tigrbl import Router as APIRouter
-from tigrbl.core.crud import Body
 from tigrbl.runtime.status import HTTPException
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
@@ -432,31 +432,13 @@ class TigrblApp(tigrbl_module.TigrblApp):
         router = APIRouter(prefix=prefix)
 
         @router.post("")
-        @router.post("/", include_in_schema=False)
-        async def create_item(
-            payload: Mapping[str, Any] = Body(default={}),
-        ):  # pragma: no cover - dynamic
-            ctx = {"payload": dict(payload or {})}
+        async def create_item(request: Request):  # pragma: no cover - dynamic
+            ctx = {"payload": dict(await request.json() or {})}
             return await model.handlers.create.handler(ctx)
 
         @router.get("")
-        @router.get("/", include_in_schema=False)
         async def list_items():  # pragma: no cover - dynamic
             return await model.handlers.list.handler({})
-
-        if callable(getattr(self, "add_api_route", None)):
-            self.add_api_route(
-                prefix,
-                create_item,
-                methods=["POST"],
-                include_in_schema=False,
-            )
-            self.add_api_route(
-                prefix,
-                list_items,
-                methods=["GET"],
-                include_in_schema=False,
-            )
 
         @router.get("/{item_id}")
         async def read_item(item_id: str):  # pragma: no cover - dynamic
@@ -465,9 +447,12 @@ class TigrblApp(tigrbl_module.TigrblApp):
 
         @router.patch("/{item_id}")
         async def update_item(
-            item_id: str, payload: Mapping[str, Any] = Body(default={})
+            item_id: str, request: Request
         ):  # pragma: no cover - dynamic
-            ctx = {"path_params": {"item_id": item_id}, "payload": dict(payload or {})}
+            ctx = {
+                "path_params": {"item_id": item_id},
+                "payload": dict(await request.json() or {}),
+            }
             return await model.handlers.update.handler(ctx)
 
         @router.delete("/{item_id}")
@@ -475,32 +460,32 @@ class TigrblApp(tigrbl_module.TigrblApp):
             ctx = {"path_params": {"item_id": item_id}}
             return await model.handlers.delete.handler(ctx)
 
-        for entry in _REGISTERED_API_OPS.get(model, []):
-            alias = entry.get("alias")
-            func = entry.get("func")
-            if not alias or func is None:
-                continue
-
-            @router.post(f"/{alias}")
-            async def _custom_op(
-                payload: Mapping[str, Any] = Body(default={}),
-                _func: Callable[..., Any] = func,
-            ):  # pragma: no cover - dynamic
-                payload_dict = dict(payload or {})
-                ctx = {"payload": payload_dict}
-                signature = inspect.signature(_func)
-                if "op_ctx" in signature.parameters:
-                    meta = getattr(_func, "_tigrbl_ctx", {})
-                    op_ctx = SimpleNamespace(**meta)
-                    result = _func(op_ctx, None, None, **payload_dict)
+        def custom_endpoint(operation: Callable[..., Any]):
+            async def handler(request: Request):
+                payload = dict(await request.json() or {})
+                if "op_ctx" in inspect.signature(operation).parameters:
+                    meta = getattr(operation, "_tigrbl_ctx", {})
+                    result = operation(SimpleNamespace(**meta), None, None, **payload)
                 else:
-                    result = _func(model=model, ctx=ctx, **payload_dict)
+                    result = operation(model=model, ctx={"payload": payload}, **payload)
                 if inspect.isawaitable(result):
-                    result = await result
+                    return await result
                 return result
 
+            return handler
+
+        for entry in _REGISTERED_API_OPS.get(model, []):
+            router.post(f"/{entry['alias']}")(custom_endpoint(entry["func"]))
+
         if mount_router:
-            self.include_router(router)
+            # Register each stub route under a unique runtime operation name.
+            for route in router.routes:
+                method = next(iter(route.methods))
+                self.route(
+                    route.path_template,
+                    methods=route.methods,
+                    name=f"{method} {route.path_template}",
+                )(route.handler)
         model.rest = SimpleNamespace(router=router)
         return router
 

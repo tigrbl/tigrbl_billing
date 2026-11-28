@@ -101,6 +101,8 @@ packages = [{ include = "tigrbl_billing", from = "src" }]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28",
+    "uvicorn",
     "pytest>=8.0",
     "pytest-asyncio>=0.24.0",
     "pytest-xdist>=3.6.1",
